@@ -12,6 +12,8 @@ import math
 import json
 import os
 from typing import List, Dict, Optional
+from datetime import timedelta
+import random
 
 # ==================== 坐标系转换模块 ====================
 class CoordConverter:
@@ -98,9 +100,9 @@ class Obstacle3D:
     """3D障碍物，包含高度信息"""
     def __init__(self, points: List[List[float]], min_height: float = 0, 
                  max_height: float = 100, name: str = "障碍物"):
-        self.points = points  # 多边形边界点 [[lat, lon], ...]
-        self.min_height = min_height  # 最低高度（米）
-        self.max_height = max_height  # 最高高度（米）
+        self.points = points
+        self.min_height = min_height
+        self.max_height = max_height
         self.name = name
         self.created_time = datetime.now()
     
@@ -126,8 +128,7 @@ class Obstacle3D:
         return obstacle
     
     def _point_in_polygon(self, point: List[float]) -> bool:
-        """检查2D点是否在多边形内"""
-        x, y = point[1], point[0]  # (lon, lat)
+        x, y = point[1], point[0]
         inside = False
         n = len(self.points)
         for i in range(n):
@@ -138,27 +139,11 @@ class Obstacle3D:
         return inside
     
     def contains_point_3d(self, point: List[float], altitude: float) -> bool:
-        """检查3D点是否在障碍物内（含高度判定）"""
-        # 先检查2D投影
         if not self._point_in_polygon(point):
             return False
-        # 再检查高度范围
         return self.min_height <= altitude <= self.max_height
     
-    def check_collision(self, flight_path: List[List[float]], altitudes: List[float]) -> bool:
-        """检查飞行路径是否与障碍物碰撞"""
-        for i, point in enumerate(flight_path):
-            alt = altitudes[i] if i < len(altitudes) else altitudes[-1]
-            if self.contains_point_3d(point, alt):
-                return True
-        return False
-    
-    def get_height_range(self) -> tuple:
-        """获取高度范围"""
-        return (self.min_height, self.max_height)
-    
     def get_description(self) -> str:
-        """获取障碍物描述"""
         return f"""
         🚧 {self.name}
         📍 边界点数: {len(self.points)}
@@ -169,14 +154,11 @@ class Obstacle3D:
 
 # ==================== 障碍物持久化管理 ====================
 class ObstaclePersistence:
-    """障碍物配置持久化管理"""
-    
     CONFIG_FILE = "obstacle_config.json"
-    VERSION = "v13.0"  # 升级版本号
+    VERSION = "v13.0"
     
     @classmethod
     def save_obstacles(cls, obstacles: List[Obstacle3D]):
-        """保存障碍物配置到文件"""
         config = {
             'version': cls.VERSION,
             'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -192,10 +174,8 @@ class ObstaclePersistence:
     
     @classmethod
     def load_obstacles(cls):
-        """从文件加载障碍物配置"""
         if not os.path.exists(cls.CONFIG_FILE):
             return [], None
-        
         try:
             with open(cls.CONFIG_FILE, 'r', encoding='utf-8') as f:
                 config = json.load(f)
@@ -206,12 +186,10 @@ class ObstaclePersistence:
     
     @classmethod
     def get_config_path(cls):
-        """获取配置文件绝对路径"""
         return os.path.abspath(cls.CONFIG_FILE)
     
     @classmethod
     def get_config_status(cls):
-        """获取配置文件状态"""
         if os.path.exists(cls.CONFIG_FILE):
             try:
                 with open(cls.CONFIG_FILE, 'r', encoding='utf-8') as f:
@@ -228,12 +206,12 @@ class ObstaclePersistence:
         return {'exists': False, 'count': 0}
 
 
-# ==================== 航线规划模块（支持3D障碍物） ====================
+# ==================== 航线规划模块 ====================
 class FlightPlanner:
     def __init__(self, obstacles: List[Obstacle3D], safe_radius: float, flight_altitude: float = 50):
         self.obstacles = obstacles
         self.safe_radius = safe_radius
-        self.flight_altitude = flight_altitude  # 飞行高度
+        self.flight_altitude = flight_altitude
     
     def calculate_distance(self, point1: List[float], point2: List[float]) -> float:
         lat1, lon1 = math.radians(point1[0]), math.radians(point1[1])
@@ -244,22 +222,13 @@ class FlightPlanner:
         a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
         return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
     
-    def is_point_safe(self, point: List[float]) -> bool:
-        """检查点是否安全（2D投影）"""
-        for obstacle in self.obstacles:
-            if obstacle._point_in_polygon(point):
-                return False
-        return True
-    
     def is_point_safe_3d(self, point: List[float]) -> bool:
-        """3D安全检查（考虑飞行高度）"""
         for obstacle in self.obstacles:
             if obstacle.contains_point_3d(point, self.flight_altitude):
                 return False
         return True
     
     def is_line_safe(self, start: List[float], end: List[float]) -> bool:
-        """检查线段是否安全（考虑飞行高度）"""
         num_samples = 20
         for i in range(num_samples + 1):
             t = i / num_samples
@@ -271,11 +240,9 @@ class FlightPlanner:
         return True
     
     def plan_route(self, start: List[float], end: List[float]) -> Optional[Dict]:
-        """规划航线（考虑3D障碍物）"""
         if not self.is_point_safe_3d(start) or not self.is_point_safe_3d(end):
             return None
         
-        # 尝试直线
         if self.is_line_safe(start, end):
             total_distance = self.calculate_distance(start, end)
             return {
@@ -288,7 +255,6 @@ class FlightPlanner:
                 'flight_altitude': self.flight_altitude
             }
         
-        # 尝试绕行
         mid_lat = (start[0] + end[0]) / 2
         mid_lon = (start[1] + end[1]) / 2
         offsets = [0.001, 0.002, 0.003, 0.004, 0.005, -0.001, -0.002, -0.003, -0.004, -0.005]
@@ -311,14 +277,13 @@ class FlightPlanner:
                             'flight_altitude': self.flight_altitude
                         }
         
-        # 尝试升高飞行高度绕过障碍物
         if self.flight_altitude < 150:
             return {
                 'waypoints': [start, end],
                 'total_distance': self.calculate_distance(start, end),
                 'estimated_time': self.calculate_distance(start, end) / 15,
                 'is_safe': False,
-                'path_type': '⚠️ 需要升高高度',
+                'path_type': '需要升高高度',
                 'num_waypoints': 2,
                 'warning': f'当前高度{self.flight_altitude}m与障碍物冲突，建议升高到150m以上',
                 'flight_altitude': self.flight_altitude
@@ -401,14 +366,9 @@ class HeartbeatMonitor:
     def send_heartbeat(self):
         self.sequence_number += 1
         send_time = datetime.now()
-        heartbeat = {
-            'seq': self.sequence_number,
-            'send_time': send_time,
-        }
+        heartbeat = {'seq': self.sequence_number, 'send_time': send_time}
         self.send_log.append(heartbeat)
         
-        # 模拟网络延迟
-        import random
         delay_ms = random.uniform(5, 50)
         receive_time = send_time + timedelta(milliseconds=delay_ms)
         heartbeat['receive_time'] = receive_time
@@ -435,7 +395,6 @@ class HeartbeatMonitor:
         self.check_timeout()
         total_sent = len(self.send_log)
         total_received = len(self.receive_log)
-        
         return {
             'heartbeat_rate': 60 if self.is_connected else 0,
             'last_heartbeat_time': self.last_heartbeat_time,
@@ -474,15 +433,12 @@ if 'page' not in st.session_state:
 if 'obstacles' not in st.session_state:
     saved_obstacles, config = ObstaclePersistence.load_obstacles()
     st.session_state.obstacles = saved_obstacles if saved_obstacles else []
-    st.session_state.obstacle_config = config
 if 'temp_obstacle' not in st.session_state:
     st.session_state.temp_obstacle = None
 if 'temp_obstacle_height' not in st.session_state:
-    st.session_state.temp_obstacle_height = [0, 100]  # [min, max]
+    st.session_state.temp_obstacle_height = [0, 100]
 if 'temp_obstacle_name' not in st.session_state:
     st.session_state.temp_obstacle_name = "障碍物"
-if 'waypoints' not in st.session_state:
-    st.session_state.waypoints = []
 if 'flight_plan' not in st.session_state:
     st.session_state.flight_plan = None
 if 'coord_type' not in st.session_state:
@@ -504,7 +460,6 @@ if 'altitude_data' not in st.session_state:
 if 'flight_altitude' not in st.session_state:
     st.session_state.flight_altitude = 50
 
-from datetime import timedelta
 
 # ==================== 侧边栏 ====================
 with st.sidebar:
@@ -512,20 +467,14 @@ with st.sidebar:
     st.caption("南京科技职业学院 · 智能监控平台")
     st.markdown("---")
     
-    # 页面导航
     st.subheader("📱 功能页面")
     page = st.radio("", ["🗺️ 航线规划", "📡 飞行监控"], label_visibility="collapsed")
     st.session_state.page = page
     
     st.markdown("---")
     
-    # 坐标系设置
     st.subheader("🌐 坐标系设置")
-    coord_type = st.selectbox(
-        "输入坐标系",
-        ["WGS-84", "GCJ-02 (高德/百度)"],
-        help="GCJ-02是中国国测局坐标，用于高德、百度地图"
-    )
+    coord_type = st.selectbox("输入坐标系", ["WGS-84", "GCJ-02 (高德/百度)"])
     st.session_state.coord_type = "WGS-84" if coord_type == "WGS-84" else "GCJ-02"
     
     if st.session_state.coord_type == "GCJ-02":
@@ -535,15 +484,12 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # 系统状态
     st.subheader("📊 系统状态")
     st.success("✅ 系统运行正常")
     
     config_status = ObstaclePersistence.get_config_status()
     if config_status['exists']:
         st.info(f"💾 障碍物配置\n共 {config_status['count']} 个 | {config_status['save_time']}")
-    else:
-        st.warning("⚠️ 暂无保存的障碍物配置")
 
 
 # ==================== 页面1: 航线规划 ====================
@@ -558,13 +504,8 @@ if st.session_state.page == "🗺️ 航线规划":
         st.subheader("🛰️ 卫星地图")
         st.caption("📍 南京科技职业学院 | 坐标: 32.2341°N, 118.7494°E")
         
-        m = folium.Map(
-            location=CAMPUS_CENTER,
-            zoom_start=18,
-            control_scale=True
-        )
+        m = folium.Map(location=CAMPUS_CENTER, zoom_start=18, control_scale=True)
         
-        # 添加高德卫星图
         folium.TileLayer(
             tiles='https://webst0{s}.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}',
             attr='高德卫星地图',
@@ -572,26 +513,19 @@ if st.session_state.page == "🗺️ 航线规划":
             name='卫星地图'
         ).add_to(m)
         
-        # 添加OpenStreetMap
         folium.TileLayer(
             tiles='https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
             attr='OpenStreetMap',
             name='街道地图'
         ).add_to(m)
         
-        # 学院标注
         folium.Marker(
             CAMPUS_CENTER,
-            popup=folium.Popup(
-                '<b>🏫 南京科技职业学院</b><br>'
-                'Nanjing Polytechnic Institute<br>'
-                '地址：南京市江北新区欣乐路188号',
-                max_width=250
-            ),
+            popup=folium.Popup('<b>🏫 南京科技职业学院</b><br>南京市江北新区欣乐路188号', max_width=250),
             icon=folium.Icon(color='red', icon='university', prefix='fa')
         ).add_to(m)
         
-        # 绘制障碍区（根据高度用不同颜色）
+        # 绘制障碍区
         for i, obstacle in enumerate(st.session_state.obstacles):
             if len(obstacle.points) >= 3:
                 display_obs = obstacle.points
@@ -601,7 +535,6 @@ if st.session_state.page == "🗺️ 航线规划":
                         wgs_lat, wgs_lon = CoordConverter.gcj02_to_wgs84(p[0], p[1])
                         display_obs.append([wgs_lat, wgs_lon])
                 
-                # 根据高度选择颜色
                 avg_height = (obstacle.min_height + obstacle.max_height) / 2
                 if avg_height > 80:
                     color = 'darkred'
@@ -612,11 +545,7 @@ if st.session_state.page == "🗺️ 航线规划":
                 
                 folium.Polygon(
                     locations=[[p[0], p[1]] for p in display_obs],
-                    color=color,
-                    weight=2,
-                    fill=True,
-                    fill_color=color,
-                    fill_opacity=0.35,
+                    color=color, weight=2, fill=True, fill_color=color, fill_opacity=0.35,
                     popup=folium.Popup(obstacle.get_description(), max_width=200)
                 ).add_to(m)
         
@@ -624,62 +553,35 @@ if st.session_state.page == "🗺️ 航线规划":
         if st.session_state.point_a:
             display_a = st.session_state.point_a
             if st.session_state.coord_type == "GCJ-02":
-                display_a = CoordConverter.gcj02_to_wgs84(
-                    st.session_state.point_a[0], 
-                    st.session_state.point_a[1]
-                )
-            folium.Marker(
-                [display_a[0], display_a[1]],
-                popup='🚁 起飞点 A',
-                icon=folium.Icon(color='green', icon='play', prefix='fa')
-            ).add_to(m)
+                display_a = CoordConverter.gcj02_to_wgs84(display_a[0], display_a[1])
+            folium.Marker([display_a[0], display_a[1]], popup='🚁 起飞点 A',
+                         icon=folium.Icon(color='green', icon='play', prefix='fa')).add_to(m)
         
         if st.session_state.point_b:
             display_b = st.session_state.point_b
             if st.session_state.coord_type == "GCJ-02":
-                display_b = CoordConverter.gcj02_to_wgs84(
-                    st.session_state.point_b[0], 
-                    st.session_state.point_b[1]
-                )
-            folium.Marker(
-                [display_b[0], display_b[1]],
-                popup='🎯 目标点 B',
-                icon=folium.Icon(color='red', icon='flag-checkered', prefix='fa')
-            ).add_to(m)
+                display_b = CoordConverter.gcj02_to_wgs84(display_b[0], display_b[1])
+            folium.Marker([display_b[0], display_b[1]], popup='🎯 目标点 B',
+                         icon=folium.Icon(color='red', icon='flag-checkered', prefix='fa')).add_to(m)
         
-        # 绘制规划航线
+        # 绘制航线
         if st.session_state.flight_plan:
             waypoints = st.session_state.flight_plan['waypoints']
             display_wps = []
             for wp in waypoints:
                 if st.session_state.coord_type == "GCJ-02":
-                    display_wp = CoordConverter.gcj02_to_wgs84(wp[0], wp[1])
-                else:
-                    display_wp = wp
-                display_wps.append([display_wp[0], display_wp[1]])
+                    wp = CoordConverter.gcj02_to_wgs84(wp[0], wp[1])
+                display_wps.append([wp[0], wp[1]])
             
-            # 航线颜色（安全为蓝色，不安全为红色）
             line_color = 'cyan' if st.session_state.flight_plan['is_safe'] else 'red'
-            folium.PolyLine(
-                display_wps,
-                color=line_color,
-                weight=3,
-                opacity=0.9,
-                popup=f"✈️ {st.session_state.flight_plan['path_type']}"
-            ).add_to(m)
+            folium.PolyLine(display_wps, color=line_color, weight=3, opacity=0.9,
+                           popup=f"✈️ {st.session_state.flight_plan['path_type']}").add_to(m)
         
         # 绘图工具
-        draw = plugins.Draw(
-            draw_options={
-                'polyline': False,
-                'rectangle': False,
-                'circle': False,
-                'marker': True,
-                'polygon': {'allowIntersection': False},
-                'circlemarker': False
-            },
-            edit_options={'edit': True}
-        )
+        draw = plugins.Draw(draw_options={
+            'polyline': False, 'rectangle': False, 'circle': False,
+            'marker': True, 'polygon': {'allowIntersection': False}, 'circlemarker': False
+        }, edit_options={'edit': True})
         draw.add_to(m)
         
         plugins.MeasureControl(position='topleft').add_to(m)
@@ -688,7 +590,6 @@ if st.session_state.page == "🗺️ 航线规划":
         
         output = st_folium(m, width=750, height=550, key="planning_map")
         
-        # 处理绘图（先保存点，等待设置高度）
         if output and 'last_active_drawing' in output:
             drawing = output['last_active_drawing']
             if drawing and drawing['geometry']['type'] == 'Polygon':
@@ -701,17 +602,14 @@ if st.session_state.page == "🗺️ 航线规划":
     with col_right:
         st.subheader("🎯 控制面板")
         
-        # ========== 新建障碍物（含高度设置） ==========
+        # 新建障碍物
         if st.session_state.temp_obstacle:
             st.markdown("### 🆕 新建3D障碍物")
             st.caption(f"已绘制 {len(st.session_state.temp_obstacle)} 个边界点")
             
-            # 障碍物名称
-            obs_name = st.text_input("障碍物名称", value=st.session_state.temp_obstacle_name, 
-                                      placeholder="例如：教学楼、图书馆")
+            obs_name = st.text_input("障碍物名称", value=st.session_state.temp_obstacle_name)
             st.session_state.temp_obstacle_name = obs_name
             
-            # 高度设置
             st.markdown("**📏 高度范围设置**")
             col1, col2 = st.columns(2)
             with col1:
@@ -722,18 +620,16 @@ if st.session_state.page == "🗺️ 航线规划":
                                         min_value=min_h + 1, max_value=300, step=5)
             st.session_state.temp_obstacle_height = [min_h, max_h]
             
-            # 高度可视化
             st.caption(f"📊 障碍物高度: {min_h}m - {max_h}m")
-            st.progress(min(100, max_h / 3))
+            # 修复：progress值必须在0.0-1.0之间
+            progress_value = min(1.0, max(0.0, max_h / 300))
+            st.progress(progress_value)
+            st.caption(f"🔼 障碍物顶部高度: {max_h}m | 🔽 底部高度: {min_h}m")
             
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("✅ 保存障碍物", use_container_width=True, type="primary"):
-                    new_obstacle = Obstacle3D(
-                        st.session_state.temp_obstacle,
-                        min_h, max_h,
-                        obs_name
-                    )
+                    new_obstacle = Obstacle3D(st.session_state.temp_obstacle, min_h, max_h, obs_name)
                     st.session_state.obstacles.append(new_obstacle)
                     st.session_state.temp_obstacle = None
                     st.session_state.temp_obstacle_height = [0, 100]
@@ -744,26 +640,22 @@ if st.session_state.page == "🗺️ 航线规划":
                 if st.button("🗑️ 取消", use_container_width=True):
                     st.session_state.temp_obstacle = None
                     st.rerun()
-            
             st.markdown("---")
         
-        # 校园快速定位
+        # 定位按钮
         st.markdown("### 🏫 校园快速定位")
         if st.button("📍 定位南京科技职业学院", use_container_width=True):
             st.success("已定位到学院中心")
             st.rerun()
-        
         st.markdown("---")
         
         # A点设置
         st.markdown("### 🚁 起点 A")
-        st.caption(f"输入坐标系: {st.session_state.coord_type}")
         col1, col2 = st.columns(2)
         with col1:
             lat_a = st.number_input("纬度", value=st.session_state.point_a[0], format="%.6f", key="lat_a")
         with col2:
             lon_a = st.number_input("经度", value=st.session_state.point_a[1], format="%.6f", key="lon_a")
-        
         if st.button("📍 设置 A 点", use_container_width=True):
             st.session_state.point_a = [lat_a, lon_a]
             st.success(f"起点已设置: ({lat_a}, {lon_a})")
@@ -776,7 +668,6 @@ if st.session_state.page == "🗺️ 航线规划":
             lat_b = st.number_input("纬度", value=st.session_state.point_b[0], format="%.6f", key="lat_b")
         with col2:
             lon_b = st.number_input("经度", value=st.session_state.point_b[1], format="%.6f", key="lon_b")
-        
         if st.button("🏁 设置 B 点", use_container_width=True):
             st.session_state.point_b = [lat_b, lon_b]
             st.success(f"终点已设置: ({lat_b}, {lon_b})")
@@ -786,18 +677,13 @@ if st.session_state.page == "🗺️ 航线规划":
         
         # 飞行参数
         st.markdown("### ⚙️ 飞行参数")
-        
-        # 飞行高度设置
-        flight_altitude = st.slider("设定飞行高度 (m)", 10, 200, st.session_state.flight_altitude,
-                                     help="无人机飞行高度，需要避开障碍物高度范围")
+        flight_altitude = st.slider("设定飞行高度 (m)", 10, 200, st.session_state.flight_altitude)
         st.session_state.flight_altitude = flight_altitude
-        
         safe_radius = st.slider("安全半径 (m)", 10, 100, 30)
         
-        # 显示当前飞行高度与障碍物的关系
+        # 高度冲突检测
         st.markdown("---")
         st.markdown("### 📊 高度冲突检测")
-        
         for i, obs in enumerate(st.session_state.obstacles):
             if obs.min_height <= flight_altitude <= obs.max_height:
                 st.warning(f"⚠️ 障碍物「{obs.name}」高度 {obs.min_height}-{obs.max_height}m 与当前飞行高度 {flight_altitude}m 冲突")
@@ -806,7 +692,7 @@ if st.session_state.page == "🗺️ 航线规划":
         
         st.markdown("---")
         
-        # ========== 障碍物管理 ==========
+        # 障碍物管理
         st.markdown("### 🚧 障碍物管理")
         st.caption(f"📦 共 {len(st.session_state.obstacles)} 个3D障碍物")
         
@@ -814,31 +700,27 @@ if st.session_state.page == "🗺️ 航线规划":
             for i, obs in enumerate(st.session_state.obstacles):
                 with st.expander(f"🚧 {obs.name} ({len(obs.points)}个点)"):
                     st.caption(f"📏 高度范围: {obs.min_height}m - {obs.max_height}m")
-                    st.caption(f"🕐 创建时间: {obs.created_time.strftime('%H:%M:%S')}")
                     if st.button(f"🗑️ 删除", key=f"del_{i}"):
                         st.session_state.obstacles.pop(i)
                         st.rerun()
         
-        # 持久化操作
         col1, col2, col3 = st.columns(3)
         with col1:
             if st.button("💾 保存配置", use_container_width=True):
-                success, result = ObstaclePersistence.save_obstacles(st.session_state.obstacles)
+                success, _ = ObstaclePersistence.save_obstacles(st.session_state.obstacles)
                 if success:
                     st.success(f"✅ 已保存 {len(st.session_state.obstacles)} 个3D障碍物")
                 else:
-                    st.error(f"保存失败: {result}")
-        
+                    st.error("保存失败")
         with col2:
             if st.button("📂 加载配置", use_container_width=True):
-                loaded, config = ObstaclePersistence.load_obstacles()
+                loaded, _ = ObstaclePersistence.load_obstacles()
                 if loaded:
                     st.session_state.obstacles = loaded
                     st.success(f"✅ 已加载 {len(loaded)} 个3D障碍物")
                     st.rerun()
                 else:
                     st.warning("没有找到保存的配置")
-        
         with col3:
             if st.button("🗑️ 清除全部", use_container_width=True):
                 st.session_state.obstacles = []
@@ -848,18 +730,11 @@ if st.session_state.page == "🗺️ 航线规划":
         # 下载配置
         st.markdown("---")
         st.markdown("### 📥 下载配置文件")
-        
-        config_status = ObstaclePersistence.get_config_status()
         if config_status['exists']:
             with open(ObstaclePersistence.CONFIG_FILE, 'r', encoding='utf-8') as f:
                 config_content = f.read()
-            st.download_button(
-                label="📥 下载 obstacle_config.json",
-                data=config_content,
-                file_name="obstacle_config.json",
-                mime="application/json",
-                use_container_width=True
-            )
+            st.download_button(label="📥 下载 obstacle_config.json", data=config_content,
+                               file_name="obstacle_config.json", mime="application/json", use_container_width=True)
         
         st.markdown("---")
         
@@ -868,20 +743,13 @@ if st.session_state.page == "🗺️ 航线规划":
         with col1:
             if st.button("🚀 规划航线", use_container_width=True, type="primary"):
                 if st.session_state.point_a and st.session_state.point_b:
-                    start = st.session_state.point_a
-                    end = st.session_state.point_b
-                    
+                    start = st.session_state.point_a.copy()
+                    end = st.session_state.point_b.copy()
                     if st.session_state.coord_type == "GCJ-02":
                         start = CoordConverter.gcj02_to_wgs84(start[0], start[1])
                         end = CoordConverter.gcj02_to_wgs84(end[0], end[1])
-                    
-                    planner = FlightPlanner(
-                        st.session_state.obstacles, 
-                        safe_radius,
-                        st.session_state.flight_altitude
-                    )
-                    flight_plan = planner.plan_route(start, end)
-                    
+                    planner = FlightPlanner(st.session_state.obstacles, safe_radius, flight_altitude)
+                    flight_plan = planner.plan_route(list(start), list(end))
                     if flight_plan:
                         st.session_state.flight_plan = flight_plan
                         if flight_plan['is_safe']:
@@ -926,29 +794,24 @@ else:
                 if st.button("▶️ 开始飞行", use_container_width=True, type="primary") and not st.session_state.is_flying:
                     st.session_state.is_flying = True
                     st.session_state.simulator = DroneSimulator(
-                        st.session_state.flight_plan['waypoints'], 
-                        15,
+                        st.session_state.flight_plan['waypoints'], 15,
                         st.session_state.flight_plan.get('flight_altitude', 50)
                     )
                     st.session_state.start_time = datetime.now()
                     st.session_state.altitude_data = []
                     st.rerun()
-            
             with col2:
                 if st.button("⏸️ 暂停", use_container_width=True):
                     st.session_state.is_flying = False
-            
             with col3:
                 if st.button("🛑 终止", use_container_width=True):
                     st.session_state.is_flying = False
                     st.session_state.simulator = None
                     st.rerun()
         
-        # 飞行仪表盘
         if st.session_state.get('is_flying') and st.session_state.get('simulator'):
             status = st.session_state.simulator.get_status()
             elapsed = (datetime.now() - st.session_state.start_time).total_seconds()
-            
             heartbeat = st.session_state.heartbeat_monitor.send_heartbeat()
             
             col1, col2, col3, col4 = st.columns(4)
@@ -975,11 +838,9 @@ else:
             
             st.progress(int(status['progress']))
             
-            # 高度数据
-            current_altitude = status['altitude']
             st.session_state.altitude_data.append({
                 'time': elapsed,
-                'altitude': current_altitude,
+                'altitude': status['altitude'],
                 'delay': heartbeat['delay_ms']
             })
             if len(st.session_state.altitude_data) > 50:
@@ -994,9 +855,7 @@ else:
                 fig.add_trace(go.Scatter(x=df['time'], y=df['delay'],
                                          mode='lines', name='心跳延迟 (ms)',
                                          line=dict(color='orange', width=2, dash='dash')))
-                fig.update_layout(title="实时飞行数据",
-                                 xaxis_title="时间 (秒)",
-                                 yaxis_title="数值")
+                fig.update_layout(title="实时飞行数据", xaxis_title="时间 (秒)", yaxis_title="数值")
                 st.plotly_chart(fig, use_container_width=True)
             
             if status['progress'] >= 100:
@@ -1012,7 +871,6 @@ else:
     
     with col_right:
         st.subheader("💓 心跳信号监控")
-        
         hb_status = st.session_state.heartbeat_monitor.get_status()
         
         col1, col2 = st.columns(2)
@@ -1047,7 +905,6 @@ else:
         if len(st.session_state.heartbeat_monitor.receive_log) > 0:
             st.markdown("---")
             st.markdown("### 📈 心跳延迟趋势")
-            
             df_delay = pd.DataFrame(st.session_state.heartbeat_monitor.receive_log[-50:])
             fig = px.line(df_delay, x='seq', y='delay_ms',
                          title="心跳延迟实时监控",

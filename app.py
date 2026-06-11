@@ -15,8 +15,8 @@ from typing import List, Dict, Optional
 class CoordConverter:
     """坐标系转换工具（WGS-84 ↔ GCJ-02）"""
     
-    a = 6378245.0  # 长半轴
-    ee = 0.00669342162296594323  # 偏心率平方
+    a = 6378245.0
+    ee = 0.00669342162296594323
     
     @staticmethod
     def _transform_lat(lon, lat):
@@ -52,7 +52,6 @@ class CoordConverter:
     
     @classmethod
     def gcj02_to_wgs84(cls, lat, lon):
-        """GCJ-02 转 WGS-84"""
         if cls._out_of_china(lon, lat):
             return lat, lon
         
@@ -73,7 +72,6 @@ class CoordConverter:
     
     @classmethod
     def wgs84_to_gcj02(cls, lat, lon):
-        """WGS-84 转 GCJ-02"""
         if cls._out_of_china(lon, lat):
             return lat, lon
         
@@ -249,7 +247,6 @@ class HeartbeatMonitor:
             'status': 'sent'
         }
         self.send_log.append(heartbeat)
-        # 模拟接收（延迟很小）
         receive_time = datetime.now()
         heartbeat['receive_time'] = receive_time
         heartbeat['delay'] = round((receive_time - send_time).total_seconds() * 1000, 2)
@@ -289,7 +286,7 @@ class HeartbeatMonitor:
 # ==================== 页面配置 ====================
 st.set_page_config(
     page_title="南京科技职业学院 - 无人机智能监控系统",
-    page_icon="🚁",
+    page_icon="🛰️",
     layout="wide"
 )
 
@@ -323,7 +320,7 @@ if 'start_time' not in st.session_state:
 
 # ==================== 侧边栏 ====================
 with st.sidebar:
-    st.title("🚁 无人机系统")
+    st.title("🛰️ 无人机系统")
     st.caption("南京科技职业学院 · 智能监控平台")
     st.markdown("---")
     
@@ -359,38 +356,32 @@ with st.sidebar:
 
 # ==================== 页面1: 航线规划 ====================
 if st.session_state.page == "🗺️ 航线规划":
-    st.title("🗺️ 航线规划")
+    st.title("🛰️ 航线规划")
     st.markdown("设置起降点、障碍区，规划安全航线 — **南京科技职业学院**")
     st.markdown("---")
     
     col_left, col_right = st.columns([1.5, 1])
     
     with col_left:
-        st.subheader("🗺️ 校园全景地图")
-        st.caption("📍 南京科技职业学院 | 坐标: 32.2341°N, 118.7494°E")
+        st.subheader("🛰️ 卫星地图")
+        st.caption("📍 南京科技职业学院 | 坐标: 32.2341°N, 118.7494°E | 来源: 高德卫星图")
         
-        # 创建地图 - 使用高德卫星图
+        # ========== 仅使用卫星地图 ==========
         m = folium.Map(
             location=CAMPUS_CENTER,
-            zoom_start=17,
+            zoom_start=18,
             control_scale=True,
-            tiles=None
+            tiles=None  # 不使用默认瓦片
         )
         
-        # 添加高德卫星图（最清晰，显示校园建筑细节）
+        # 只添加高德卫星图（清晰显示校园建筑、道路、绿化等细节）
         folium.TileLayer(
             tiles='https://webst0{s}.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}',
-            attr='高德卫星图',
+            attr='高德卫星地图',
             subdomains=['1', '2', '3', '4'],
-            name='📷 卫星地图'
-        ).add_to(m)
-        
-        # 添加高德街道图
-        folium.TileLayer(
-            tiles='https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
-            attr='高德地图',
-            subdomains=['1', '2', '3', '4'],
-            name='🗺️ 街道地图'
+            name='卫星地图',
+            overlay=False,
+            control=True
         ).add_to(m)
         
         # 添加标注：南京科技职业学院
@@ -400,17 +391,19 @@ if st.session_state.page == "🗺️ 航线规划":
                 '<b>🏫 南京科技职业学院</b><br>'
                 'Nanjing Polytechnic Institute<br>'
                 '地址：南京市江北新区欣乐路188号<br>'
-                '📍 坐标：32.234097, 118.749413',
+                '📍 坐标：32.234097, 118.749413<br>'
+                '🛰️ 卫星影像',
                 max_width=250
             ),
             icon=folium.Icon(color='red', icon='university', prefix='fa')
         ).add_to(m)
         
-        # 添加校园范围示意
+        # 添加校园范围示意（蓝色圆圈）
         folium.Circle(
             CAMPUS_CENTER,
             radius=300,
             color='blue',
+            weight=2,
             fill=True,
             fill_opacity=0.1,
             popup='校园范围 (300m)'
@@ -421,7 +414,6 @@ if st.session_state.page == "🗺️ 航线规划":
             if len(obstacle) >= 3:
                 display_obs = obstacle
                 if st.session_state.coord_type == "GCJ-02":
-                    # 转换坐标显示
                     display_obs = []
                     for p in obstacle:
                         wgs_lat, wgs_lon = CoordConverter.gcj02_to_wgs84(p[0], p[1])
@@ -433,7 +425,7 @@ if st.session_state.page == "🗺️ 航线规划":
                     weight=2,
                     fill=True,
                     fill_color='red',
-                    fill_opacity=0.3,
+                    fill_opacity=0.35,
                     popup=f'🚧 障碍区 {i+1}'
                 ).add_to(m)
         
@@ -477,9 +469,9 @@ if st.session_state.page == "🗺️ 航线规划":
             
             folium.PolyLine(
                 display_wps,
-                color='blue',
+                color='cyan',
                 weight=3,
-                opacity=0.8,
+                opacity=0.9,
                 popup='✈️ 规划航线'
             ).add_to(m)
             
@@ -487,10 +479,10 @@ if st.session_state.page == "🗺️ 航线规划":
                 folium.Marker(
                     wp,
                     popup=f'📍 航点 {i}',
-                    icon=folium.Icon(color='orange', icon='info-sign')
+                    icon=folium.Icon(color='orange', icon='info-sign', prefix='fa')
                 ).add_to(m)
         
-        # 添加绘图工具
+        # 添加绘图工具（用于圈选障碍区）
         draw = plugins.Draw(
             draw_options={
                 'polyline': False,
@@ -504,14 +496,18 @@ if st.session_state.page == "🗺️ 航线规划":
         )
         draw.add_to(m)
         
-        # 添加图层控制
-        folium.LayerControl().add_to(m)
-        
         # 添加测量工具
-        plugins.MeasureControl().add_to(m)
+        plugins.MeasureControl(
+            position='topleft',
+            active_color='red',
+            completed_color='green'
+        ).add_to(m)
+        
+        # 添加全屏按钮
+        plugins.Fullscreen().add_to(m)
         
         # 显示地图
-        output = st_folium(m, width=700, height=500, key="planning_map")
+        output = st_folium(m, width=750, height=550, key="planning_map")
         
         # 处理地图绘图
         if output and 'last_active_drawing' in output:
@@ -520,7 +516,7 @@ if st.session_state.page == "🗺️ 航线规划":
                 coords = drawing['geometry']['coordinates'][0]
                 points = [[c[1], c[0]] for c in coords]
                 st.session_state['temp_obstacle'] = points
-                st.success(f"已绘制 {len(points)} 个点的障碍区，点击'保存障碍区'确认")
+                st.success(f"✅ 已绘制 {len(points)} 个点的障碍区，点击右侧「保存障碍区」确认")
     
     with col_right:
         st.subheader("🎯 控制面板")
@@ -528,8 +524,7 @@ if st.session_state.page == "🗺️ 航线规划":
         # 校园快速定位
         st.markdown("### 🏫 校园快速定位")
         if st.button("📍 定位南京科技职业学院", use_container_width=True):
-            st.session_state.map_center = CAMPUS_CENTER
-            st.success("已定位到学院中心")
+            st.success("已定位到学院中心（卫星视图）")
             st.rerun()
         
         st.markdown("---")
@@ -571,11 +566,12 @@ if st.session_state.page == "🗺️ 航线规划":
         
         # 障碍区管理
         st.markdown("### 🚧 障碍区管理")
+        st.caption("📌 在地图上使用「多边形工具」绘制障碍区边界")
         
         if 'temp_obstacle' in st.session_state:
             col1, col2 = st.columns(2)
             with col1:
-                if st.button("✅ 保存障碍区", use_container_width=True):
+                if st.button("✅ 保存障碍区", use_container_width=True, type="primary"):
                     st.session_state.obstacles.append(st.session_state.temp_obstacle)
                     del st.session_state.temp_obstacle
                     st.success("障碍区已保存")
@@ -615,10 +611,10 @@ if st.session_state.page == "🗺️ 航线规划":
                     
                     if flight_plan:
                         st.session_state.flight_plan = flight_plan
-                        st.success("航线规划成功！")
+                        st.success("✅ 航线规划成功！")
                         st.rerun()
                     else:
-                        st.error("无法规划安全航线，请调整障碍区或航点")
+                        st.error("❌ 无法规划安全航线，请调整障碍区或航点")
                 else:
                     st.warning("请先设置 A 点和 B 点")
         

@@ -810,4 +810,124 @@ else:
             with col3:
                 if st.button("🛑 终止", use_container_width=True):
                     st.session_state.is_flying = False
-                    st.session_state.simulator =
+                    st.session_state.simulator = None
+                    st.rerun()
+        
+        # 飞行仪表盘
+        if st.session_state.get('is_flying') and st.session_state.get('simulator'):
+            status = st.session_state.simulator.get_status()
+            elapsed = (datetime.now() - st.session_state.start_time).total_seconds()
+            
+            # 发送心跳
+            heartbeat = st.session_state.heartbeat_monitor.send_heartbeat()
+            
+            # 仪表盘
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("📍 当前航点", f"{status['current_waypoint']}/{status['total_waypoints']}")
+            with col2:
+                st.metric("⚡ 飞行速度", "15 m/s")
+            with col3:
+                st.metric("⏱️ 已用时间", f"{elapsed:.1f}s")
+            with col4:
+                st.metric("📏 剩余距离", f"{status['remaining_distance']:.0f}m")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("📊 完成进度", f"{status['progress']:.1f}%")
+            with col2:
+                battery = max(0, 100 - elapsed / 6)
+                st.metric("🔋 电量", f"{battery:.0f}%")
+            with col3:
+                hb_status = st.session_state.heartbeat_monitor.get_status()
+                st.metric("💓 心跳", f"{hb_status['heartbeat_rate']}/min")
+            with col4:
+                st.metric("📡 延迟", f"{heartbeat['delay_ms']} ms")
+            
+            # 进度条
+            st.progress(int(status['progress']))
+            
+            # 模拟高度数据
+            current_altitude = 50 + math.sin(elapsed * 2) * 5
+            st.session_state.altitude_data.append({
+                'time': elapsed,
+                'altitude': current_altitude,
+                'delay': heartbeat['delay_ms']
+            })
+            if len(st.session_state.altitude_data) > 50:
+                st.session_state.altitude_data = st.session_state.altitude_data[-50:]
+            
+            # 实时数据图表
+            if len(st.session_state.altitude_data) > 1:
+                df = pd.DataFrame(st.session_state.altitude_data)
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=df['time'], y=df['altitude'],
+                                         mode='lines', name='飞行高度 (m)',
+                                         line=dict(color='green', width=2)))
+                fig.add_trace(go.Scatter(x=df['time'], y=df['delay'],
+                                         mode='lines', name='心跳延迟 (ms)',
+                                         line=dict(color='orange', width=2, dash='dash')))
+                fig.update_layout(title="实时飞行数据",
+                                 xaxis_title="时间 (秒)",
+                                 yaxis_title="数值")
+                st.plotly_chart(fig, use_container_width=True)
+            
+            if status['progress'] >= 100:
+                st.success("✅ 飞行完成！")
+                st.session_state.is_flying = False
+                st.balloons()
+            else:
+                st.session_state.simulator.update(0.1)
+                time.sleep(0.1)
+                st.rerun()
+        else:
+            st.info("点击「开始飞行」启动监控")
+    
+    with col_right:
+        st.subheader("💓 心跳信号监控")
+        
+        hb_status = st.session_state.heartbeat_monitor.get_status()
+        
+        # 心跳统计
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("📤 发送总数", hb_status['total_sent'])
+        with col2:
+            st.metric("📥 接收总数", hb_status['total_received'])
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("✅ 成功率", f"{hb_status['success_rate']:.1f}%")
+        with col2:
+            st.metric("⚠️ 超时次数", hb_status['timeout_count'])
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            status_text = "🟢 正常" if hb_status['is_connected'] else "🔴 超时"
+            st.metric("🔗 连接状态", status_text)
+        with col2:
+            st.metric("💓 心跳频率", f"{hb_status['heartbeat_rate']}/min")
+        
+        st.markdown("---")
+        st.markdown("### 📋 最新心跳记录")
+        
+        recent = st.session_state.heartbeat_monitor.get_recent_heartbeats(8)
+        if recent:
+            df = pd.DataFrame(recent)
+            st.dataframe(df, use_container_width=True, hide_index=True)
+        else:
+            st.info("等待心跳信号...")
+        
+        # 延迟图表
+        if len(st.session_state.heartbeat_monitor.receive_log) > 0:
+            st.markdown("---")
+            st.markdown("### 📈 心跳延迟趋势")
+            
+            df_delay = pd.DataFrame(st.session_state.heartbeat_monitor.receive_log[-50:])
+            fig = px.line(df_delay, x='seq', y='delay_ms',
+                         title="心跳延迟实时监控",
+                         labels={'seq': '心跳序号', 'delay_ms': '延迟(ms)'})
+            fig.add_hline(y=sum([h['delay_ms'] for h in df_delay.to_dict('records')]) / len(df_delay) if len(df_delay) > 0 else 0,
+                         line_dash="dash", line_color="red",
+                         annotation_text="平均延迟")
+            st.plotly_chart(fig, use_container_width=True)

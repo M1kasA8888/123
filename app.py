@@ -9,6 +9,8 @@ import time
 import plotly.graph_objects as go
 import plotly.express as px
 import math
+import json
+import os
 from typing import List, Dict, Optional
 
 # ==================== 坐标系转换模块 ====================
@@ -91,6 +93,66 @@ class CoordConverter:
         return mg_lat, mg_lon
 
 
+# ==================== 障碍物持久化管理 ====================
+class ObstaclePersistence:
+    """障碍物配置持久化管理"""
+    
+    CONFIG_FILE = "obstacle_config.json"
+    VERSION = "v12.2"
+    
+    @classmethod
+    def save_obstacles(cls, obstacles: List):
+        """保存障碍物配置到文件"""
+        config = {
+            'version': cls.VERSION,
+            'save_time': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            'obstacles': obstacles,
+            'count': len(obstacles)
+        }
+        try:
+            with open(cls.CONFIG_FILE, 'w', encoding='utf-8') as f:
+                json.dump(config, f, ensure_ascii=False, indent=2)
+            return True, config
+        except Exception as e:
+            return False, str(e)
+    
+    @classmethod
+    def load_obstacles(cls):
+        """从文件加载障碍物配置"""
+        if not os.path.exists(cls.CONFIG_FILE):
+            return [], None
+        
+        try:
+            with open(cls.CONFIG_FILE, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+            return config.get('obstacles', []), config
+        except Exception as e:
+            return [], None
+    
+    @classmethod
+    def get_config_path(cls):
+        """获取配置文件绝对路径"""
+        return os.path.abspath(cls.CONFIG_FILE)
+    
+    @classmethod
+    def get_config_status(cls):
+        """获取配置文件状态"""
+        if os.path.exists(cls.CONFIG_FILE):
+            try:
+                with open(cls.CONFIG_FILE, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                return {
+                    'exists': True,
+                    'count': config.get('count', 0),
+                    'save_time': config.get('save_time', '未知'),
+                    'version': config.get('version', '未知'),
+                    'path': cls.get_config_path()
+                }
+            except:
+                return {'exists': False, 'error': '读取失败'}
+        return {'exists': False, 'count': 0}
+
+
 # ==================== 航线规划模块 ====================
 class FlightPlanner:
     def __init__(self, obstacles: List[List[List[float]]], safe_radius: float):
@@ -124,7 +186,7 @@ class FlightPlanner:
         return True
     
     def is_line_safe(self, start: List[float], end: List[float]) -> bool:
-        num_samples = 10
+        num_samples = 20
         for i in range(num_samples + 1):
             t = i / num_samples
             lat = start[0] + (end[0] - start[0]) * t
@@ -150,7 +212,7 @@ class FlightPlanner:
         
         mid_lat = (start[0] + end[0]) / 2
         mid_lon = (start[1] + end[1]) / 2
-        offsets = [0.002, 0.005, 0.008, -0.002, -0.005, -0.008]
+        offsets = [0.001, 0.002, 0.003, 0.004, 0.005, -0.001, -0.002, -0.003, -0.004, -0.005]
         
         for offset_lat in offsets:
             for offset_lon in offsets:
@@ -236,7 +298,9 @@ class HeartbeatMonitor:
         self.sequence_number = 0
         self.send_log = []
         self.receive_log = []
+        self.timeout_log = []
         self.last_heartbeat_time = None
+        self.is_connected = False
     
     def send_heartbeat(self):
         self.sequence_number += 1
@@ -244,31 +308,47 @@ class HeartbeatMonitor:
         heartbeat = {
             'seq': self.sequence_number,
             'send_time': send_time,
-            'status': 'sent'
         }
         self.send_log.append(heartbeat)
-        receive_time = datetime.now()
+        
+        # 模拟网络延迟（0-50ms）
+        import random
+        delay_ms = random.uniform(5, 50)
+        receive_time = send_time + timedelta(milliseconds=delay_ms)
         heartbeat['receive_time'] = receive_time
-        heartbeat['delay'] = round((receive_time - send_time).total_seconds() * 1000, 2)
+        heartbeat['delay_ms'] = round(delay_ms, 2)
         self.receive_log.append(heartbeat)
         self.last_heartbeat_time = receive_time
+        self.is_connected = True
         return heartbeat
     
-    def get_status(self):
+    def check_timeout(self):
+        """检查超时"""
         current_time = datetime.now()
-        last_time = self.last_heartbeat_time
-        is_connected = last_time and (current_time - last_time).total_seconds() < 3
-        
+        if self.last_heartbeat_time:
+            elapsed = (current_time - self.last_heartbeat_time).total_seconds()
+            if elapsed > 3:
+                self.is_connected = False
+                self.timeout_log.append({
+                    'time': current_time,
+                    'elapsed': elapsed,
+                    'message': f'连接超时: {elapsed:.1f}秒未收到心跳'
+                })
+        return self.is_connected
+    
+    def get_status(self):
+        self.check_timeout()
         total_sent = len(self.send_log)
         total_received = len(self.receive_log)
         
         return {
-            'heartbeat_rate': 60 if is_connected else 0,
-            'last_heartbeat_time': last_time,
+            'heartbeat_rate': 60 if self.is_connected else 0,
+            'last_heartbeat_time': self.last_heartbeat_time,
             'total_sent': total_sent,
             'total_received': total_received,
-            'is_connected': is_connected,
-            'success_rate': (total_received / total_sent * 100) if total_sent > 0 else 0
+            'is_connected': self.is_connected,
+            'success_rate': (total_received / total_sent * 100) if total_sent > 0 else 0,
+            'timeout_count': len(self.timeout_log)
         }
     
     def get_recent_heartbeats(self, n=10):
@@ -278,9 +358,12 @@ class HeartbeatMonitor:
                 'seq': h['seq'],
                 'send_time': h['send_time'].strftime("%H:%M:%S.%f")[:-3],
                 'receive_time': h['receive_time'].strftime("%H:%M:%S.%f")[:-3],
-                'delay_ms': h['delay']
+                'delay_ms': h['delay_ms']
             })
         return recent
+    
+    def get_delay_data(self):
+        return [(h['seq'], h['delay_ms']) for h in self.receive_log]
 
 
 # ==================== 页面配置 ====================
@@ -297,7 +380,10 @@ CAMPUS_CENTER = [32.234097, 118.749413]
 if 'page' not in st.session_state:
     st.session_state.page = "航线规划"
 if 'obstacles' not in st.session_state:
-    st.session_state.obstacles = []
+    # 尝试加载保存的障碍物
+    saved_obstacles, config = ObstaclePersistence.load_obstacles()
+    st.session_state.obstacles = saved_obstacles if saved_obstacles else []
+    st.session_state.obstacle_config = config
 if 'waypoints' not in st.session_state:
     st.session_state.waypoints = []
 if 'flight_plan' not in st.session_state:
@@ -305,9 +391,9 @@ if 'flight_plan' not in st.session_state:
 if 'coord_type' not in st.session_state:
     st.session_state.coord_type = "GCJ-02"
 if 'point_a' not in st.session_state:
-    st.session_state.point_a = [32.2322, 118.749]
+    st.session_state.point_a = [32.2323, 118.749]
 if 'point_b' not in st.session_state:
-    st.session_state.point_b = [32.2343, 118.754]
+    st.session_state.point_b = [32.2344, 118.749]
 if 'heartbeat_monitor' not in st.session_state:
     st.session_state.heartbeat_monitor = HeartbeatMonitor()
 if 'is_flying' not in st.session_state:
@@ -316,7 +402,10 @@ if 'simulator' not in st.session_state:
     st.session_state.simulator = None
 if 'start_time' not in st.session_state:
     st.session_state.start_time = None
+if 'altitude_data' not in st.session_state:
+    st.session_state.altitude_data = []
 
+from datetime import timedelta
 
 # ==================== 侧边栏 ====================
 with st.sidebar:
@@ -339,19 +428,24 @@ with st.sidebar:
         help="GCJ-02是中国国测局坐标，用于高德、百度地图"
     )
     st.session_state.coord_type = "WGS-84" if coord_type == "WGS-84" else "GCJ-02"
-    st.info(f"当前坐标系: {st.session_state.coord_type}")
+    
+    if st.session_state.coord_type == "GCJ-02":
+        st.info("📍 当前使用 GCJ-02 坐标系\n(高德/百度地图)")
+    else:
+        st.info("🌍 当前使用 WGS-84 坐标系\n(GPS/国际标准)")
     
     st.markdown("---")
     
     # 系统状态
     st.subheader("📊 系统状态")
     st.success("✅ 系统运行正常")
-    st.info(f"📍 障碍区数量: {len(st.session_state.obstacles)}")
     
-    if st.session_state.flight_plan:
-        st.success("✈️ 航线已规划")
+    # 障碍物持久化状态
+    config_status = ObstaclePersistence.get_config_status()
+    if config_status['exists']:
+        st.info(f"💾 障碍物配置\n共 {config_status['count']} 个 | {config_status['save_time']}")
     else:
-        st.warning("⚠️ 未规划航线")
+        st.warning("⚠️ 暂无保存的障碍物配置")
 
 
 # ==================== 页面1: 航线规划 ====================
@@ -364,17 +458,16 @@ if st.session_state.page == "🗺️ 航线规划":
     
     with col_left:
         st.subheader("🛰️ 卫星地图")
-        st.caption("📍 南京科技职业学院 | 坐标: 32.2341°N, 118.7494°E | 来源: 高德卫星图")
+        st.caption("📍 南京科技职业学院 | 坐标: 32.2341°N, 118.7494°E | 地图: OpenStreetMap")
         
-        # ========== 仅使用卫星地图 ==========
+        # 创建地图 - 使用 OpenStreetMap
         m = folium.Map(
             location=CAMPUS_CENTER,
             zoom_start=18,
-            control_scale=True,
-            tiles=None  # 不使用默认瓦片
+            control_scale=True
         )
         
-        # 只添加高德卫星图（清晰显示校园建筑、道路、绿化等细节）
+        # 添加高德卫星图（更清晰）
         folium.TileLayer(
             tiles='https://webst0{s}.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}',
             attr='高德卫星地图',
@@ -384,6 +477,13 @@ if st.session_state.page == "🗺️ 航线规划":
             control=True
         ).add_to(m)
         
+        # 添加OpenStreetMap作为备选
+        folium.TileLayer(
+            tiles='https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+            attr='OpenStreetMap',
+            name='街道地图'
+        ).add_to(m)
+        
         # 添加标注：南京科技职业学院
         folium.Marker(
             CAMPUS_CENTER,
@@ -391,22 +491,10 @@ if st.session_state.page == "🗺️ 航线规划":
                 '<b>🏫 南京科技职业学院</b><br>'
                 'Nanjing Polytechnic Institute<br>'
                 '地址：南京市江北新区欣乐路188号<br>'
-                '📍 坐标：32.234097, 118.749413<br>'
-                '🛰️ 卫星影像',
+                '📍 坐标：32.234097, 118.749413',
                 max_width=250
             ),
             icon=folium.Icon(color='red', icon='university', prefix='fa')
-        ).add_to(m)
-        
-        # 添加校园范围示意（蓝色圆圈）
-        folium.Circle(
-            CAMPUS_CENTER,
-            radius=300,
-            color='blue',
-            weight=2,
-            fill=True,
-            fill_opacity=0.1,
-            popup='校园范围 (300m)'
         ).add_to(m)
         
         # 绘制已保存的障碍区
@@ -482,7 +570,7 @@ if st.session_state.page == "🗺️ 航线规划":
                     icon=folium.Icon(color='orange', icon='info-sign', prefix='fa')
                 ).add_to(m)
         
-        # 添加绘图工具（用于圈选障碍区）
+        # 添加绘图工具
         draw = plugins.Draw(
             draw_options={
                 'polyline': False,
@@ -506,6 +594,9 @@ if st.session_state.page == "🗺️ 航线规划":
         # 添加全屏按钮
         plugins.Fullscreen().add_to(m)
         
+        # 添加图层控制
+        folium.LayerControl().add_to(m)
+        
         # 显示地图
         output = st_folium(m, width=750, height=550, key="planning_map")
         
@@ -516,7 +607,7 @@ if st.session_state.page == "🗺️ 航线规划":
                 coords = drawing['geometry']['coordinates'][0]
                 points = [[c[1], c[0]] for c in coords]
                 st.session_state['temp_obstacle'] = points
-                st.success(f"✅ 已绘制 {len(points)} 个点的障碍区，点击右侧「保存障碍区」确认")
+                st.success(f"✅ 已绘制 {len(points)} 个点的障碍区")
     
     with col_right:
         st.subheader("🎯 控制面板")
@@ -524,13 +615,14 @@ if st.session_state.page == "🗺️ 航线规划":
         # 校园快速定位
         st.markdown("### 🏫 校园快速定位")
         if st.button("📍 定位南京科技职业学院", use_container_width=True):
-            st.success("已定位到学院中心（卫星视图）")
+            st.success("已定位到学院中心")
             st.rerun()
         
         st.markdown("---")
         
         # A点设置
         st.markdown("### 🚁 起点 A")
+        st.caption(f"输入坐标系: {st.session_state.coord_type}")
         col1, col2 = st.columns(2)
         with col1:
             lat_a = st.number_input("纬度", value=st.session_state.point_a[0], format="%.6f", key="lat_a")
@@ -559,38 +651,94 @@ if st.session_state.page == "🗺️ 航线规划":
         
         # 飞行参数
         st.markdown("### ⚙️ 飞行参数")
-        flight_height = st.slider("设定飞行高度 (m)", 20, 200, 50)
+        flight_height = st.slider("设定飞行高度 (m)", 10, 200, 50)
         safe_radius = st.slider("安全半径 (m)", 10, 100, 30)
         
         st.markdown("---")
         
-        # 障碍区管理
-        st.markdown("### 🚧 障碍区管理")
-        st.caption("📌 在地图上使用「多边形工具」绘制障碍区边界")
+        # ========== 障碍物配置持久化 ==========
+        st.markdown("### 🚧 障碍物配置持久化")
+        st.caption(f"📁 配置文件: {ObstaclePersistence.get_config_path()}")
+        st.caption(f"📌 版本: {ObstaclePersistence.VERSION}")
         
+        # 显示当前障碍物状态
+        if st.session_state.obstacles:
+            st.info(f"📦 当前共 {len(st.session_state.obstacles)} 个障碍物")
+        
+        # 临时障碍物处理
         if 'temp_obstacle' in st.session_state:
             col1, col2 = st.columns(2)
             with col1:
                 if st.button("✅ 保存障碍区", use_container_width=True, type="primary"):
                     st.session_state.obstacles.append(st.session_state.temp_obstacle)
                     del st.session_state.temp_obstacle
-                    st.success("障碍区已保存")
+                    st.success("障碍区已添加")
                     st.rerun()
             with col2:
                 if st.button("🗑️ 取消", use_container_width=True):
                     del st.session_state.temp_obstacle
                     st.rerun()
         
+        # 障碍物列表
         if st.session_state.obstacles:
-            for i, obs in enumerate(st.session_state.obstacles):
-                with st.expander(f"障碍区 {i+1} ({len(obs)} 个点)"):
-                    if st.button(f"删除", key=f"del_{i}"):
+            with st.expander(f"📋 障碍物列表 ({len(st.session_state.obstacles)}个)"):
+                for i, obs in enumerate(st.session_state.obstacles):
+                    st.text(f"障碍区 {i+1}: {len(obs)} 个点")
+                    if st.button(f"🗑️ 删除 {i+1}", key=f"del_{i}"):
                         st.session_state.obstacles.pop(i)
                         st.rerun()
         
-        if st.button("🗑️ 清除所有障碍区", use_container_width=True):
-            st.session_state.obstacles = []
-            st.rerun()
+        # 持久化操作按钮
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            if st.button("💾 保存配置", use_container_width=True):
+                success, result = ObstaclePersistence.save_obstacles(st.session_state.obstacles)
+                if success:
+                    st.success(f"✅ 已保存 {len(st.session_state.obstacles)} 个障碍物")
+                    config_status = ObstaclePersistence.get_config_status()
+                    st.info(f"保存时间: {config_status['save_time']}")
+                else:
+                    st.error(f"保存失败: {result}")
+        
+        with col2:
+            if st.button("📂 加载配置", use_container_width=True):
+                loaded, config = ObstaclePersistence.load_obstacles()
+                if loaded:
+                    st.session_state.obstacles = loaded
+                    st.success(f"✅ 已加载 {len(loaded)} 个障碍物")
+                    if config:
+                        st.info(f"保存时间: {config.get('save_time', '未知')}")
+                    st.rerun()
+                else:
+                    st.warning("没有找到保存的配置")
+        
+        with col3:
+            if st.button("🗑️ 清除全部", use_container_width=True):
+                st.session_state.obstacles = []
+                st.success("已清除所有障碍物")
+                st.rerun()
+        
+        # 下载配置文件
+        st.markdown("---")
+        st.markdown("### 📥 下载配置文件")
+        
+        config_status = ObstaclePersistence.get_config_status()
+        if config_status['exists']:
+            st.caption(f"文件状态: 共 {config_status['count']} 个障碍物")
+            st.caption(f"保存时间: {config_status['save_time']}")
+            st.caption(f"版本: {config_status['version']}")
+            
+            with open(ObstaclePersistence.CONFIG_FILE, 'r', encoding='utf-8') as f:
+                config_content = f.read()
+            st.download_button(
+                label="📥 下载 obstacle_config.json",
+                data=config_content,
+                file_name="obstacle_config.json",
+                mime="application/json",
+                use_container_width=True
+            )
+        else:
+            st.info("暂无配置文件，保存后即可下载")
         
         st.markdown("---")
         
@@ -652,6 +800,7 @@ else:
                         st.session_state.flight_plan['waypoints'], 15
                     )
                     st.session_state.start_time = datetime.now()
+                    st.session_state.altitude_data = []
                     st.rerun()
             
             with col2:
@@ -661,87 +810,4 @@ else:
             with col3:
                 if st.button("🛑 终止", use_container_width=True):
                     st.session_state.is_flying = False
-                    st.session_state.simulator = None
-                    st.rerun()
-        
-        # 飞行仪表盘
-        if st.session_state.get('is_flying') and st.session_state.get('simulator'):
-            status = st.session_state.simulator.get_status()
-            elapsed = (datetime.now() - st.session_state.start_time).total_seconds()
-            
-            # 发送心跳
-            heartbeat = st.session_state.heartbeat_monitor.send_heartbeat()
-            
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("📍 当前航点", f"{status['current_waypoint']}/{status['total_waypoints']}")
-            with col2:
-                st.metric("⚡ 飞行速度", "15 m/s")
-            with col3:
-                st.metric("⏱️ 已用时间", f"{elapsed:.1f}s")
-            with col4:
-                st.metric("📏 剩余距离", f"{status['remaining_distance']:.0f}m")
-            
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("📊 完成进度", f"{status['progress']:.1f}%")
-            with col2:
-                battery = max(0, 100 - elapsed / 6)
-                st.metric("🔋 电量", f"{battery:.0f}%")
-            with col3:
-                hb_status = st.session_state.heartbeat_monitor.get_status()
-                st.metric("💓 心跳", f"{hb_status['heartbeat_rate']}/min")
-            with col4:
-                st.metric("📡 延迟", f"{heartbeat['delay']} ms")
-            
-            st.progress(int(status['progress']))
-            
-            if status['progress'] >= 100:
-                st.success("✅ 飞行完成！")
-                st.session_state.is_flying = False
-                st.balloons()
-            else:
-                st.session_state.simulator.update(0.1)
-                time.sleep(0.1)
-                st.rerun()
-        else:
-            st.info("点击「开始飞行」启动监控")
-    
-    with col_right:
-        st.subheader("💓 心跳信号监控")
-        
-        hb_status = st.session_state.heartbeat_monitor.get_status()
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("📤 发送总数", hb_status['total_sent'])
-        with col2:
-            st.metric("📥 接收总数", hb_status['total_received'])
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("✅ 成功率", f"{hb_status['success_rate']:.1f}%")
-        with col2:
-            status_text = "🟢 正常" if hb_status['is_connected'] else "🔴 超时"
-            st.metric("🔗 连接状态", status_text)
-        
-        st.markdown("---")
-        st.markdown("### 📋 最新心跳记录")
-        
-        recent = st.session_state.heartbeat_monitor.get_recent_heartbeats(8)
-        if recent:
-            df = pd.DataFrame(recent)
-            st.dataframe(df, use_container_width=True, hide_index=True)
-        else:
-            st.info("等待心跳信号...")
-        
-        # 延迟图表
-        if len(st.session_state.heartbeat_monitor.receive_log) > 0:
-            st.markdown("---")
-            st.markdown("### 📈 心跳延迟趋势")
-            
-            df_delay = pd.DataFrame(st.session_state.heartbeat_monitor.receive_log[-30:])
-            fig = px.line(df_delay, x='seq', y='delay',
-                         title="心跳延迟实时监控",
-                         labels={'seq': '心跳序号', 'delay': '延迟(ms)'})
-            st.plotly_chart(fig, use_container_width=True)
+                    st.session_state.simulator =
